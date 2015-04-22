@@ -6,7 +6,7 @@ output: html_document
 keep_md: yes
 ---
 
-# Finding Best Prediction Model
+# Finding Best Prediction Model for Personal Activity
 
 ## Background
 Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: <http://groupware.les.inf.puc-rio.br/har> (please check section on the Weight Lifting Exercise Dataset).
@@ -227,7 +227,7 @@ save(rf7.fit, file = "rf7.RData")
 
 Accuracy of RF model with only 7 most important predictors is `r format(round(cmrf7$overall[[1]]*100, 2), nsmall = 2)`%.
 
-Using random forest model, the error rate estimated using the probing data set is the smallest. The expected out-of-sample error is estimated to be `r format(round((1 - cmrf$overall[[1]])*100, 2), nsmall = 2)`%. Hence we will use RF model `rf.fit` on our test data set.
+Using random forest model, the error rate estimated using the probing data set is the smallest. The expected **out-of-sample (OOB) error rate** is estimated to be `r format(round(rf.fit$err.rate[500,1]*100, 2), nsmall = 2)`%. Hence we will use RF model `rf.fit` on our test data set.
 
 ## Predict on the test data
 

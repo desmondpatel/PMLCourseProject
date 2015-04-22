@@ -1,0 +1,275 @@
+---
+title: "Practical Machine Learning - Prediction Project"
+author: "JDP"
+date: "Tuesday, April 14, 2015"
+output: html_document
+keep_md: yes
+---
+
+# Finding Best Prediction Model
+
+## Background
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: <http://groupware.les.inf.puc-rio.br/har> (please check section on the Weight Lifting Exercise Dataset).
+
+```{r global_options, include = FALSE}
+knitr::opts_chunk$set(fig.width = 15, fig.height = 10,  
+                      warning = FALSE, message = FALSE)
+```
+
+## Data
+The training data for this project was downloaded from:
+<https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv>
+The test data was downloaded from:
+<https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv>
+The data for this project came from this source: <http://groupware.les.inf.puc-rio.br/har>.
+
+## Preparation of datasets
+Load the training data into a data table/frame.
+
+```{r load_train_data, cache = TRUE}
+library(data.table)
+setwd("C:/Users/Desmond/Documents/PML")
+dat <- fread("pml-training.csv")
+dim(dat)
+```
+
+Load the testing data into a data table/frame.
+
+```{r load_test_data, cache = TRUE}
+testdat <- fread("pml-testing.csv")
+dim(testdat)
+```
+
+Find columns with all missing values.
+
+Belt, arm, dumbbell, and forearm variables without missing values in the train (and test) dataset are chosen as predictor candidates.
+
+```{r process_data, cache = TRUE}
+isAnyMissing <- sapply(dat, function (x) any(is.na(x) | x == ""))
+isPredictor <- !isAnyMissing & grepl("belt|[^(fore)]arm|dumbbell|forearm", names(isAnyMissing))
+predCandidates <- names(isAnyMissing)[isPredictor]
+```
+
+Subset the original dataset to include only the predictor candidates and the outcome/response variable, classe.
+
+```{r subset_data, cache = TRUE}
+varsToInclude <- c("classe", predCandidates)
+subdat <- dat[, varsToInclude, with = FALSE]
+dim(subdat)
+names(subdat)
+```
+
+Make classe into a factor (and find count for each classe value).
+
+```{r factor_classe, cache = TRUE}
+subdat <- subdat[, classe := factor(subdat[, classe])]
+subdat[, .N, classe]
+```
+
+## Splitting training dataset
+The subsetted dataset was then divided into two partitions, a training partition (60%) and a validation/probing partition (40%). It creates a list because by default, value of parameter _list_ is _TRUE_.
+
+```{r split, cache = TRUE}
+library(caret)
+seed <- as.numeric(as.Date("2015-04-14"))
+set.seed(seed)
+inTrain <- createDataPartition(subdat$classe, p = 0.6)
+datTrain <- subdat[inTrain[[1]]]
+datProbe <- subdat[-inTrain[[1]]]
+```
+
+## Data transformation using centering and scaling
+
+Preprocess the prediction variables by centering and scaling.
+
+```{r cs_train, cache = TRUE}
+X <- datTrain[, predCandidates, with = FALSE]
+preProc <- preProcess(X)
+preProc
+XCS <- predict(preProc, X)
+datTrainCS <- cbind(classe = datTrain[, classe], XCS)
+```
+
+Apply the centering and scaling to the probing dataset.
+
+```{r cs_probe, cache = TRUE}
+X <- datProbe[, predCandidates, with = FALSE]
+XCS <- predict(preProc, X)
+datProbeCS <- cbind(classe = datProbe[, classe], XCS)
+```
+
+Check for variables with near zero variance.
+
+```{r nzv, cache = TRUE}
+NZV <- nearZeroVar(datTrainCS, saveMetrics = TRUE)
+if (any(NZV$nzv)) NZV else print("No variables with near zero variance")
+```
+
+## Exploratory graphs
+Examine various groups of (centered and scaled) prediction variables using [violin plots](http://en.wikipedia.org/wiki/Violin_plot) (combination of box plots and kernel density plots).
+
+```{r violin_plots, cache = TRUE}
+# create a function for violin plot
+violinGroup <- function (data, regex) {
+  col <- grep(regex, names(data))
+  col <- c(col, which(names(data) == "classe"))
+  library(reshape2)
+  n <- nrow(data)
+  datMelted <- melt(data[, col, with = FALSE][, rownum := seq(1, n)], 
+                    id.vars = c("rownum", "classe"))
+  library(ggplot2)
+  ggplot(datMelted, aes(x = classe, y = value)) +
+    geom_violin(aes(color = classe, fill = classe), alpha = 1/2) +
+    facet_wrap(~ variable, scale = "free_y") +
+    scale_color_brewer(palette = "Spectral") +
+    scale_fill_brewer(palette = "Spectral") +
+    labs(x = "classe", y = "standard normal variate (Z)") +
+    theme(legend.position = "none")
+}
+
+# make violin plots
+vg11 <- violinGroup(data.table(datTrainCS), "belt")
+vg12 <- violinGroup(data.table(datTrainCS), "[^(fore)]arm")
+vg21 <- violinGroup(data.table(datTrainCS), "dumbbell")
+vg22 <- violinGroup(data.table(datTrainCS), "forearm")
+
+# draw the plots in a grid
+library(gridExtra)
+grid.arrange(vg11, vg12, vg21, vg22, nrow = 2, ncol = 2, 
+             widths = c(5), heights = c(10), 
+             main = "Violin Plots (classe vs predictors)")
+```
+
+Variances are high in classe E for gyros.belt.x, gyros.belt.z, magnet.belt.z, and gyros.arm.z whereas outliers exist in classe A for gyros.forearm.x, gyros.forearm.y and gyros.forearm.z as well as for gyros.dumbbell.x, gyros.dumbbell.y and gyros.dumbbell.z. Please note that y-axes scales (for Z values) are different for each graph.
+
+```{r cor_mat, cache = TRUE}
+library(corrplot)
+corMat <- cor(as.data.frame.matrix(datTrain)[, -1])
+corrplot(corMat, order = "FPC", method = "color", type = "lower", 
+         title = "Correlation Matrix", mar = c(0, 0, 2, 0), 
+         tl.cex = 0.7, tl.col = rgb(0, 0, 0), col.main = "darkblue")
+```
+
+The above left triangular matrix shows the correlation between pairs of the predictors in our training dataset. The dark blue and dark red squares indicate high positive and high negative correlations respectively. These can be explored further using principal component analysis.
+
+## Train prediction models
+
+Let us now fit classification and regression tree model, linear discriminant analysis model and random forest model and then find the best one. I have not fit generalized linear model as classe is a factor variable (and it will have to be converted to numeric first) and will give meaningless predictions as decimal numbers (see Quiz 3 - Q3).
+
+```{r cart, cache = TRUE}
+### Classification & regression tree (CART/C&RT) model
+cart.fit <- train(classe ~ ., method = "rpart", data = datTrain)
+# plot prettier classification tree
+rattle::fancyRpartPlot(cart.fit$finalModel)
+# predict outcomes for probe data set using CART model
+pcart <- predict(cart.fit, newdata = datProbe)
+# find confusion matrix
+cmcart <- confusionMatrix(pcart, datProbe$classe)
+cmcart
+save(cart.fit, file = "cart.RData")
+```
+
+Accuracy of CART model is `r format(round(cmcart$overall[[1]]*100, 2), nsmall = 2)`%.
+
+```{r lda, cache = TRUE}
+### Linear discriminant analysis
+lda.fit <- train(classe ~ ., method = "lda", data = datTrainCS)
+# predict outcomes for probe data set using LDA model
+plda <- predict(lda.fit, datProbeCS)
+# find confusion matrix
+cmlda <- confusionMatrix(plda, datProbeCS$classe)
+cmlda
+save(lda.fit, file = "lda.RData")
+```
+Accuracy of LDA model is `r format(round(cmlda$overall[[1]]*100, 2), nsmall = 2)`%.
+
+```{r rf, cache = TRUE, fig.width = 12, fig.height = 8}
+### Random forests
+# set up for parallel clusters
+library(parallel)
+library(doParallel)
+cl <- makeCluster(detectCores() - 1)
+registerDoParallel(cl)
+# fit a random forest
+library(randomForest)
+set.seed(123456)
+rf.fit <- randomForest(classe ~ ., data = datTrain, ntree = 500, mtry = 20)
+stopCluster(cl)
+# predict outcomes for probe data set using random forest model
+prf <- predict(rf.fit, datProbe)
+# find confusion matrix
+cmrf <- confusionMatrix(prf, datProbe$classe)
+cmrf
+# plot importance of predictors
+varImpPlot(rf.fit, sort = TRUE, type = 2, col = 4, cex = 1, col.main = "blue", 
+           main = "Importance of the Individual Predictors")
+save(rf.fit, file = "rf.RData")
+```
+
+Accuracy of RF model is `r format(round(cmrf$overall[[1]]*100, 2), nsmall = 2)`%. Let us try RF with only 7 most important predictors (see graph above).
+
+```{r rf7, cache = TRUE}
+cl <- makeCluster(detectCores() - 1)
+registerDoParallel(cl)
+# fit a random forest
+set.seed(123456)
+rf7.fit <- randomForest(classe ~ roll_belt + yaw_belt + pitch_forearm + 
+        magnet_dumbbell_z + pitch_belt + roll_forearm + magnet_dumbbell_y, 
+        data = datTrain, ntree = 500)
+stopCluster(cl)
+# predict outcomes for probe data set using random forest model
+prf7 <- predict(rf7.fit, datProbe)
+# find confusion matrix
+cmrf7 <- confusionMatrix(prf7, datProbe$classe)
+cmrf7
+save(rf7.fit, file = "rf7.RData")
+```
+
+Accuracy of RF model with only 7 most important predictors is `r format(round(cmrf7$overall[[1]]*100, 2), nsmall = 2)`%.
+
+Using random forest model, the error rate estimated using the probing data set is the smallest. The expected out-of-sample error is estimated to be `r format(round((1 - cmrf$overall[[1]])*100, 2), nsmall = 2)`%. Hence we will use RF model `rf.fit` on our test data set.
+
+## Predict on the test data
+
+Get predictions and evaluate.
+
+```{r test, cache = TRUE}
+subtestdat <- testdat[, predCandidates, with = FALSE]
+hat <- predict(rf.fit, subtestdat)
+subtestdat <- cbind(hat , subtestdat)
+```
+
+**NOTE:** We get the same values for `hat` vector (classification of outcomes) if we use `rf7.fit` model.
+
+## Submission to Coursera
+
+Write submission files to "PML - Prediction Project Writeup files/answers" folder.
+
+```{r submit}
+pml_write_files = function(x){
+  n = length(x)
+  path <- "PML_-_Prediction_Project_Writeup_files/answers"
+  if (!file.exists(path)) 
+      dir.create(path)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i], file = file.path(path, filename), quote = FALSE, 
+                row.names = FALSE, col.names = FALSE)
+  }
+}
+pml_write_files(hat)
+```
+
+The predictions produced by the RF models were marked as 100% correct on first submission when the files created above were submitted to assignment submission page on Coursera website.
+
+## Conclusion
+
+All models ran quickly. The two random forest models ran within 2.5 minutes (`rf7.fit` ran within 20 seconds). The key was to use `library(randomForest)` instead of `library(caret)` for RF models.
+
+Random forest models were the best for accuracy, though. Model `rf.fit` was `r format(round(cmrf$overall[[1]]*100, 2), nsmall = 2)`% accurate while model `rf7.fit` (using only 7 predictors) was `r format(round(cmrf7$overall[[1]]*100, 2), nsmall = 2)`% accurate in classifying outcomes. These 7 predictors also do not have issues mentioned in violin plots above.
+
+## Bibliography
+
+1. Groupware@LES. *Human Activity Recognition*. Retrieved on 7th Apr 2015 from <http://groupware.les.inf.puc-rio.br/har>.  
+2. Velloso, E., Bulling, A., Gellersen, H., Ugulino, W., Fuks, H. *Qualitative Activity Recognition of Weight Lifting Exercises*. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13). Stuttgart, Germany: ACM SIGCHI, 2013.  
+3. Wikipedia. *Violin plot*. Retrieved on 10th Apr 2015 from <http://en.wikipedia.org/wiki/Violin_plot>.  
